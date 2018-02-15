@@ -1,6 +1,6 @@
 import * as os from 'os';
 import * as tl from 'vsts-task-lib/task';
-import * as url from 'url';
+import * as URL from 'url';
 
 import { NormalizeRegistry } from './npmrcparser';
 import * as util from './util';
@@ -23,11 +23,15 @@ export class NpmRegistry implements INpmRegistry {
     }
 
     public static FromServiceEndpoint(endpointId: string, authOnly?: boolean): NpmRegistry {
-        let email: string;
-        let username: string;
-        let password: string;
+        let lineEnd = os.EOL;
         let endpointAuth: tl.EndpointAuthorization;
         let url: string;
+        let nerfed: string;
+        let auth: string;
+        let username: string;
+        let password: string;
+        let email: string;
+        let password64: string;
         try {
             endpointAuth = tl.getEndpointAuthorization(endpointId, false);
         } catch (exception) {
@@ -36,6 +40,12 @@ export class NpmRegistry implements INpmRegistry {
 
         try {
             url = NormalizeRegistry(tl.getEndpointUrl(endpointId, false));
+            if (endpointAuth.scheme === 'Token' &&
+                URL.parse(url).hostname.toUpperCase().endsWith('.VISUALSTUDIO.COM')){
+                // VSTS does not support a PAT in _authToken.  Therefore, you must do basic.
+                endpointAuth.scheme = 'CrossAccount';
+            }
+            nerfed = util.toNerfDart(url);
         } catch (exception) {
             throw new Error(tl.loc('ServiceEndpointUrlNotDefined'));
         }
@@ -45,23 +55,29 @@ export class NpmRegistry implements INpmRegistry {
                 username = endpointAuth.parameters['username'];
                 password = endpointAuth.parameters['password'];
                 email = username; // npm needs an email to be set in order to publish, this is ignored on npmjs
+                password64 = (new Buffer(password).toString('base64'));
+
+                auth = nerfed + ":username=" + username + lineEnd;
+                auth += nerfed + ":_password=" + password64 + lineEnd;
+                auth += nerfed + ":email=" + email + lineEnd;
                 break;
-            case 'Token':
+            case 'CrossAccount':
                 email = 'VssEmail';
                 username = 'VssToken';
                 password = endpointAuth.parameters['apitoken'];
+                password64 = (new Buffer(password).toString('base64'));
+
+                auth = nerfed + ":username=" + username + lineEnd;
+                auth += nerfed + ":_password=" + password64 + lineEnd;
+                auth += nerfed + ":email=" + email + lineEnd;
+                break;
+            case 'Token':
+                let apitoken = endpointAuth.parameters['apitoken'];
+                auth = nerfed + ":_authToken=" + apitoken + lineEnd;
                 break;
         }
-       let lineEnd = os.EOL;
-        let nerfed = util.toNerfDart(url); 
-        let password64 = (new Buffer(password).toString('base64'));
-        console.log("##vso[task.setvariable variable=" + endpointId + "BASE64_PASSWORD;issecret=true;]" + password64);
 
-        let auth = nerfed + ":username=" + username + lineEnd;
-        auth += nerfed + ":_password=" + password64 + lineEnd;
-        auth += nerfed + ":email=" + email + lineEnd;
         auth += nerfed + ":always-auth=true";
-
         return new NpmRegistry(url, auth, authOnly);
     }
 
